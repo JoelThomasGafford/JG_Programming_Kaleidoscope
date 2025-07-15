@@ -1,0 +1,123 @@
+// KalKernel: Kaleidoscope effect with true pre-rotation and final rotation
+kernel KalKernel : ImageComputationKernel<eComponentWise>
+{
+  Image<eRead, eAccessRandom, eEdgeConstant> src;
+  Image<eWrite, eAccessPoint> dst;
+
+  param:
+    int numSegments;
+    float centerX;
+    float centerY;
+    float zoom;
+    float preRotateDeg;
+    float rotationDeg;
+    bool srcTriangle;
+
+  local:
+    float _anglePerSegment;
+    float2 _center;
+    float2 _centerOffset;
+
+  void define()
+  {
+    defineParam(numSegments, "Segments", 6);
+    defineParam(centerX, "Center X", 0.5f);
+    defineParam(centerY, "Center Y", 0.5f);
+    defineParam(zoom, "Zoom", 1.0f);
+    defineParam(preRotateDeg, "Pre-Rotation", 180.0f);
+    defineParam(rotationDeg, "Rotation", 180.0f);
+    defineParam(srcTriangle, "Source Triangle", false);
+  }
+
+  void init()
+  {
+    float2 imgSize = float2(float(src.bounds.width()), float(src.bounds.height()));
+    float2 center = float2(centerX, centerY);
+    _center = center * imgSize;
+
+    float2 imageCenter = float2(imgSize.x * 0.5f, imgSize.y * 0.5f);
+    _centerOffset = _center - imageCenter;
+
+    _anglePerSegment = 6.28318530718f / float(numSegments);
+  }
+
+void process(int2 pos)
+{
+  float2 posF = float2(float(pos.x), float(pos.y));
+
+
+
+
+  // --- Regular Kaleidoscope below for numSegments != 2 ---
+  float2 correctedPos = posF + _centerOffset;
+
+  // Apply zoom
+  float2 delta = (correctedPos - _center) / zoom;
+
+  // Final image rotation (after kaleidoscope effect)
+  float rotationRad = rotationDeg * 0.01745329252f;
+  float sinRot = sin(rotationRad);
+  float cosRot = cos(rotationRad);
+  float2 rotatedDelta = float2(
+    delta.x * cosRot - delta.y * sinRot,
+    delta.x * sinRot + delta.y * cosRot
+  );
+
+  // Convert to polar coordinates
+  float angle = atan2(rotatedDelta.y, rotatedDelta.x);
+  float radius = length(rotatedDelta);
+
+  // Mirror angle into one wedge
+  float wrapped = fmod(angle, _anglePerSegment);
+  if (wrapped < 0.0f)
+    wrapped += _anglePerSegment;
+  if (wrapped > _anglePerSegment * 0.5f)
+    wrapped = _anglePerSegment - wrapped;
+
+  // Convert back to cartesian coordinates
+  float2 rotated = float2(radius * cos(wrapped), radius * sin(wrapped));
+  float2 samplePos = _center + rotated;
+
+  // Apply pre-rotation around _center (this rotates the image content)
+  float preRotationRad = preRotateDeg * 0.01745329252f;
+  float sinPre = sin(preRotationRad);
+  float cosPre = cos(preRotationRad);
+  float2 offset = samplePos - _center;
+  float2 rotatedSamplePos = float2(
+    offset.x * cosPre - offset.y * sinPre,
+    offset.x * sinPre + offset.y * cosPre
+  ) + _center;
+
+  float val = bilinear(src, rotatedSamplePos.x, rotatedSamplePos.y);
+
+  // Optional: highlight the source triangle used in kaleidoscope
+  if (srcTriangle)
+  {
+    float2 delta = posF - _center;
+    float radius = length(delta);
+    float angle = atan2(delta.y, delta.x);
+    if (angle < 0.0f) angle += 6.28318530718f;
+
+    float angleStart = preRotateDeg * 0.01745329252f;
+    angleStart = fmod(angleStart, 6.28318530718f);
+    if (angleStart < 0.0f) angleStart += 6.28318530718f;
+
+    float angleEnd = angleStart + (_anglePerSegment * 0.5f);
+    angleEnd = fmod(angleEnd, 6.28318530718f);
+    if (angleEnd < 0.0f) angleEnd += 6.28318530718f;
+
+    bool inside = false;
+    if (angleStart < angleEnd)
+      inside = angle >= angleStart && angle <= angleEnd;
+    else
+      inside = angle >= angleStart || angle <= angleEnd;
+
+    if (inside && radius < src.bounds.width() * 10.0f)
+    {
+      val = 1.0f - val;
+    }
+  }
+
+  dst() = val;
+}
+};
